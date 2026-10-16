@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://bjmefyaa4uq4c"]
 
-[ext_resource type="Script" uid="uid://cjil7c6veiim1" path="res://character_body_3d.gd" id="1_xhfnw"]
+[ext_resource type="Script" uid="uid://cjil7c6veiim1" path="res://Player/Player.gd" id="1_3qydi"]
 
 [sub_resource type="CapsuleMesh" id="CapsuleMesh_ux12u"]
 radial_segments = 8
@@ -23,18 +23,15 @@ emission_energy_multiplier = 5.0
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_ep77b"]
 
-[node name="CharacterBody3D" type="CharacterBody3D" unique_id=1557324044]
-script = ExtResource("1_xhfnw")
-SPEED = 8.0
-sprint_speed = 13.0
-mouse_sensitivity = 0.119
+[node name="Player" type="CharacterBody3D" unique_id=1557324044]
+script = ExtResource("1_3qydi")
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=802850235]
 mesh = SubResource("CapsuleMesh_ux12u")
 surface_material_override/0 = SubResource("StandardMaterial3D_6l4mb")
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="MeshInstance3D" unique_id=1659855909]
-transform = Transform3D(1, 0, 0, 0, -3.3508297e-08, 1, 0, -0.76658046, -4.371139e-08, 0, 0.38889158, -0.48406655)
+transform = Transform3D(-1, -6.701659e-08, -3.821371e-15, 0, -3.3508297e-08, 1, -8.742278e-08, 0.76658046, 4.371139e-08, 0, 0.38889158, 0.46068776)
 mesh = SubResource("PrismMesh_ux12u")
 surface_material_override/0 = SubResource("StandardMaterial3D_w8oks")
 

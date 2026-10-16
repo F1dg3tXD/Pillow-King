@@ -15,10 +15,19 @@ run/main_scene="uid://bl77pw1p78vte"
 config/features=PackedStringArray("4.7", "Forward Plus")
 config/icon="res://icon.svg"
 
+[autoload]
+
+Player="*uid://bjmefyaa4uq4c"
+
 [display]
 
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
+
+[global_group]
+
+KillZone="Kill zone ... for killing"
+Player="player... he plays"
 
 [input]
 

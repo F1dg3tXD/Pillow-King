@@ -98,3 +98,8 @@ func _physics_process(delta: float) -> void:
 		_last_movement_direction = move_direction
 	var target_angle := Vector3.BACK.signed_angle_to(_last_movement_direction, Vector3.UP)
 	playermesh.rotation.y = lerp_angle(playermesh.rotation.y, target_angle, rotation_speed * delta)
+
+func _respawn() -> void:
+	pass
+	
+	
