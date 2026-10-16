@@ -24,6 +24,10 @@ Player="*res://Player/Player.tscn"
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/godot_collab/plugin.cfg")
+
 [global_group]
 
 KillZone="Kill zone ... for killing"

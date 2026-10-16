@@ -15,5 +15,5 @@ normal_enabled = true
 normal_texture = ExtResource("4_7qksm")
 ao_enabled = true
 ao_texture = ExtResource("2_ls6dr")
+uv1_scale = Vector3(0.1, 0.1, 0.1)
 uv1_triplanar = true
-uv1_triplanar_sharpness = 0.5176324
