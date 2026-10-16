@@ -4,7 +4,7 @@
 
 [sub_resource type="CapsuleMesh" id="CapsuleMesh_ux12u"]
 radial_segments = 8
-rings = 2
+rings = 5
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_6l4mb"]
 albedo_color = Color(0.15940145, 0.5718864, 0.8052682, 1)
@@ -21,10 +21,11 @@ emission_enabled = true
 emission = Color(0.9869955, 0.8432807, 0.6911268, 1)
 emission_energy_multiplier = 5.0
 
-[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_ep77b"]
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_3qydi"]
 
-[node name="Player" type="CharacterBody3D" unique_id=1557324044]
+[node name="Player" type="CharacterBody3D" unique_id=1557324044 groups=["Player"]]
 script = ExtResource("1_3qydi")
+sprint_speed = 10.0
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=802850235]
 mesh = SubResource("CapsuleMesh_ux12u")
@@ -36,7 +37,7 @@ mesh = SubResource("PrismMesh_ux12u")
 surface_material_override/0 = SubResource("StandardMaterial3D_w8oks")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=742867124]
-shape = SubResource("CapsuleShape3D_ep77b")
+shape = SubResource("CylinderShape3D_3qydi")
 
 [node name="CameraRoot" type="Node3D" parent="." unique_id=2068812348]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.8448154, 0)

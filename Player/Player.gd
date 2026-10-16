@@ -99,7 +99,41 @@ func _physics_process(delta: float) -> void:
 	var target_angle := Vector3.BACK.signed_angle_to(_last_movement_direction, Vector3.UP)
 	playermesh.rotation.y = lerp_angle(playermesh.rotation.y, target_angle, rotation_speed * delta)
 
-func _respawn() -> void:
+func respawn() -> void:
+	if not _place_at_spawn_point():
+		push_warning("Player.respawn(): no SpawnPoint found in the current map.")
+
+
+func _on_node_added(node: Node) -> void:
 	pass
-	
+
+
+func _ensure_spawned() -> void:
+	pass
+
+
+func _place_at_spawn_point() -> bool:
+	var spawn_point := _find_spawn_point()
+	if spawn_point == null:
+		return false
+
+	# Teleport to the spawn point and clear any leftover momentum.
+	global_position = spawn_point.global_position
+	velocity = Vector3.ZERO
+	reset_physics_interpolation()
+	return true
+
+
+func _find_spawn_point() -> Node3D:
+	# Prefer a node in the "SpawnPoint" group, then fall back to a node named
+	# "SpawnPoint" anywhere in the current map.
+	var node := get_tree().get_first_node_in_group("SpawnPoint")
+	if node is Node3D:
+		return node
+
+	var current_scene := get_tree().current_scene
+	if current_scene:
+		return current_scene.find_child("SpawnPoint", true, false) as Node3D
+
+	return null
 	

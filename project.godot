@@ -17,7 +17,7 @@ config/icon="res://icon.svg"
 
 [autoload]
 
-Player="*uid://bjmefyaa4uq4c"
+Player="*res://Player/Player.tscn"
 
 [display]
 
@@ -28,6 +28,7 @@ window/stretch/aspect="expand"
 
 KillZone="Kill zone ... for killing"
 Player="player... he plays"
+SpawnPoint="where the player respawns"
 
 [input]
 

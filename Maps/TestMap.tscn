@@ -1,13 +1,15 @@
 [gd_scene format=3 uid="uid://bl77pw1p78vte"]
 
+[ext_resource type="Material" uid="uid://drav465lco7u7" path="res://Maps/Poliigon_GrassPatchyGround_4585/1K/AssGrass.tres" id="1_qixgj"]
 [ext_resource type="PackedScene" uid="uid://bod7nq4ifhtma" path="res://Maps/sky.tscn" id="2_6l4mb"]
-[ext_resource type="PackedScene" uid="uid://bjmefyaa4uq4c" path="res://Player/Player.tscn" id="2_d41l6"]
 [ext_resource type="PackedScene" uid="uid://d3lxrrkb0rmer" path="res://Entities/kill_zone.tscn" id="2_qixgj"]
+[ext_resource type="PackedScene" uid="uid://gu6ykdhdpv51" path="res://Entities/spawn_point.tscn" id="3_d41l6"]
 
 [node name="Node3D" type="Node3D" unique_id=567674071]
 
 [node name="Level 1" type="CSGBox3D" parent="." unique_id=662840749]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 39.47424, -0.012023926, 32.251358)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 39.451263, -0.012023926, 32.28797)
+material_override = ExtResource("1_qixgj")
 use_collision = true
 size = Vector3(95.2763, 0.08459473, 76.27155)
 
@@ -61,7 +63,7 @@ sides = 19
 [node name="CSGTorus3D" type="CSGTorus3D" parent="Level 1" unique_id=1709795895]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -8.410717, 6.773798, 26.978409)
 inner_radius = 13.350284
-outer_radius = 0.9473756
+outer_radius = 2.6300144
 
 [node name="CSGTorus3D2" type="CSGTorus3D" parent="Level 1" unique_id=1569478277]
 transform = Transform3D(1, 0, 0, 0, 0.9842671, 0.17668669, 0, -0.17668669, 0.9842671, 12.297478, 9.476381, 42.9477)
@@ -71,12 +73,12 @@ outer_radius = 4.461162
 [node name="CSGTorus3D3" type="CSGTorus3D" parent="Level 1" unique_id=973523968]
 transform = Transform3D(1, 0, 0, 0, 0.9842671, 0.17668669, 0, -0.17668669, 0.9842671, 34.825153, 13.339817, 59.193863)
 inner_radius = 13.251257
-outer_radius = 7.9470696
+outer_radius = 5.6934915
 
 [node name="CSGTorus3D4" type="CSGTorus3D" parent="Level 1" unique_id=1244231655]
-transform = Transform3D(0.913532, -0.17663704, 0.36641315, 0, 0.9007942, 0.43424648, -0.40676677, -0.39669806, 0.82290435, 54.991344, 22.313488, 77.88351)
+transform = Transform3D(0.913532, -0.17663704, 0.36641315, 0, 0.9007942, 0.43424648, -0.40676677, -0.39669806, 0.82290435, 54.991344, 21.681992, 77.88351)
 inner_radius = 13.251257
-outer_radius = 10.709212
+outer_radius = 8.895883
 
 [node name="Sky" parent="." unique_id=892737542 instance=ExtResource("2_6l4mb")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.4187517, 0, -9.876967)
@@ -84,7 +86,7 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.4187517, 0, -9.876967)
 [node name="KillZone" parent="." unique_id=1629670752 instance=ExtResource("2_qixgj")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -19.281944, 0)
 
-[node name="SpawnPoint" type="Node3D" parent="." unique_id=390769444]
+[node name="SpawnPoint" parent="." unique_id=192751869 instance=ExtResource("3_d41l6")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 31.266365, 2.4441652, 24.040806)
 
 [node name="Boss 1" type="CSGCylinder3D" parent="." unique_id=1861287435]
@@ -94,27 +96,27 @@ radius = 144.33594
 height = 45.004333
 
 [node name="CSGCylinder3D6" type="CSGCylinder3D" parent="Boss 1" unique_id=435945400]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 176.68608, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 113.97168, 0)
 radius = 144.33594
-height = 12.272339
+height = 40.53708
 
 [node name="CSGCylinder3D2" type="CSGCylinder3D" parent="Boss 1" unique_id=729941460]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 83.901825, -123.96622)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 25.542416, -123.96622)
 radius = 16.037598
 height = 180.07599
 
 [node name="CSGCylinder3D3" type="CSGCylinder3D" parent="Boss 1" unique_id=1563059088]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 83.901825, 123.50873)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 25.542416, 123.50873)
 radius = 16.037598
 height = 180.07599
 
 [node name="CSGCylinder3D4" type="CSGCylinder3D" parent="Boss 1" unique_id=743322398]
-transform = Transform3D(-4.371139e-08, 0, -1, 0, 1, 0, 1, 0, -4.371139e-08, 123.73747, 83.901825, -0.2287445)
+transform = Transform3D(-4.371139e-08, 0, -1, 0, 1, 0, 1, 0, -4.371139e-08, 123.73747, 25.542416, -0.2287445)
 radius = 16.037598
 height = 180.07599
 
 [node name="CSGCylinder3D5" type="CSGCylinder3D" parent="Boss 1" unique_id=1766491697]
-transform = Transform3D(-4.371139e-08, 0, -1, 0, 1, 0, 1, 0, -4.371139e-08, -123.73747, 83.901825, -0.2287445)
+transform = Transform3D(-4.371139e-08, 0, -1, 0, 1, 0, 1, 0, -4.371139e-08, -123.73747, 25.542416, -0.2287445)
 radius = 16.037598
 height = 180.07599
 
@@ -122,6 +124,3 @@ height = 180.07599
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -30.177597, 0)
 inner_radius = 157.44673
 outer_radius = 92.0541
-
-[node name="CharacterBody3D" parent="." unique_id=1557324044 instance=ExtResource("2_d41l6")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 28.217855, 1.0302806, 19.69006)
