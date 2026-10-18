@@ -41,6 +41,7 @@ var _upnp_attempted: bool = false
 var _upnp_external: String = ""
 var _short_code: String = ""
 var _pending_lookup: bool = false
+var _relay_rendezvous_url: String = ""
 var _last_connectivity_state: int = -1
 
 
@@ -87,6 +88,7 @@ func _enter_tree() -> void:
 	_presence = CollabPresenceService.new()
 	_presence.setup(_coordinator, _settings, _logs)
 	_presence.set_editor_interface_provider(Callable(self, "get_editor_interface"))
+	_presence.set_drag_data_provider(Callable(self, "_drag_data"))
 	add_child(_presence)
 
 	_markers = CollabMarkerManager.new()
@@ -198,6 +200,7 @@ func _process(delta: float) -> void:
 	if _coordinator.session_manager.is_active():
 		update_overlays()
 		_markers.poll()
+		_presence.tick_local()
 	# Keep the dock's participant list and connectivity reasonably fresh.
 	if _coordinator.session_manager.is_active() and _times % 15 == 0:
 		_dock.set_participants(_coordinator.registry.all())
@@ -259,7 +262,7 @@ func _set_invite(invite: String) -> void:
 		_toolbar.set_invite_available(not invite.strip_edges().is_empty())
 
 
-func _on_host_requested(username: String, port: int, mode: int, use_rendezvous: bool) -> void:
+func _on_host_requested(username: String, port: int, mode: int, use_rendezvous: bool, use_relay: bool) -> void:
 	if _coordinator.session_manager.is_active():
 		_dock.push_message("Already in a session. Disconnect first.", true)
 		return
@@ -270,6 +273,16 @@ func _on_host_requested(username: String, port: int, mode: int, use_rendezvous: 
 	_coordinator.approve_joins = _settings.get_bool(CollabSettings.KEY_APPROVE_JOINS, false)
 	_coordinator.require_token = _settings.get_bool(CollabSettings.KEY_REQUIRE_TOKEN, true)
 	var max_peers: int = clampi(_settings.get_int(CollabSettings.KEY_MAX_PEERS, CollabConstants.DEFAULT_MAX_PEERS), 1, 64)
+	if use_relay and _settings.get_string(CollabSettings.KEY_RELAY_ADDRESS, "").strip_edges().is_empty():
+		# Relay is the default, but it needs a server address. Rather than refuse
+		# to host, fall back to a direct session and tell the user why.
+		use_relay = false
+		if _dock != null:
+			_dock.set_relay_config(false, "", 0)
+			_dock.push_message("No relay server configured; hosting directly on port %d. Enter a relay address to host over the internet." % port, true)
+	if use_relay:
+		_host_via_relay(mode, max_peers, use_rendezvous)
+		return
 	var err: Error = _coordinator.start_host(port, max_peers, mode, _coordinator.approve_joins)
 	if err != OK:
 		_dock.push_message("Failed to host: %s" % error_string(err), true)
@@ -285,6 +298,88 @@ func _on_host_requested(username: String, port: int, mode: int, use_rendezvous: 
 			_dock.push_message("UPnP failed: %s. Use manual port forwarding or LAN." % str(result.get("error", "")), true)
 	_establish_invite(use_rendezvous, port, mode)
 	_update_connectivity()
+
+
+## Hosts through a dedicated relay server. Generates a short room code and a
+## random session token, then advertises a `gc2.` invitation that embeds both the
+## relay endpoint and the room so clients can reach the host with no port
+## forwarding on either side.
+##
+## When [param use_rendezvous] is set and a rendezvous service is available (the
+## relay Docker image bundles one), the host also registers a short code and shows
+## that instead; clients using it must have the rendezvous URL configured. When it
+## is not set, the long `gc2.` code is shown, and the rendezvous URL is embedded
+## in it so a client that pastes it auto-configures the service and can then use
+## short codes.
+func _host_via_relay(mode: int, max_peers: int, use_rendezvous: bool) -> void:
+	var endpoint: Dictionary = _parse_relay_address(_settings.get_string(CollabSettings.KEY_RELAY_ADDRESS, ""), _settings.get_int(CollabSettings.KEY_RELAY_PORT, CollabConstants.DEFAULT_RELAY_PORT))
+	if endpoint.is_empty():
+		_dock.push_message("Invalid relay address. Enter a host or host:port.", true)
+		return
+	var relay_host: String = str(endpoint["host"])
+	var relay_port: int = int(endpoint["port"])
+	var room: String = CollabInviteCode.generate_short_code()
+	var token: String = _random_token()
+	var err: Error = _coordinator.start_host_via_relay(relay_host, relay_port, room, token, max_peers, mode, _coordinator.approve_joins)
+	if err != OK:
+		_dock.push_message("Failed to start relay session: %s" % error_string(err), true)
+		return
+	_upnp_attempted = false
+	_upnp_external = ""
+	_relay_rendezvous_url = _resolve_rendezvous_url(endpoint)
+	if use_rendezvous and not _relay_rendezvous_url.is_empty():
+		_rendezvous.set_base_url(_relay_rendezvous_url)
+		_short_code = CollabInviteCode.generate_short_code()
+		_rendezvous.register_relay_code(_short_code, relay_host, relay_port, room, token, CollabConstants.INVITE_TTL_SECONDS, _project_id(), mode)
+		_set_invite(_short_code)
+		_dock.push_message("Registering short invitation code with the rendezvous service...", false)
+	else:
+		if use_rendezvous:
+			_dock.push_message("No rendezvous service configured; sharing a long relay code instead.", false)
+		_set_invite(CollabInviteCode.encode_relay(relay_host, relay_port, room, token, _project_id(), mode, _relay_rendezvous_url))
+	_dock.set_connectivity(CollabConstants.ConnectivityState.RELAY, "relay %s:%d, room %s" % [relay_host, relay_port, room])
+	_dock.push_message("Hosting via relay %s:%d (room %s). Share the invitation code." % [relay_host, relay_port, room], false)
+
+
+## Resolves the rendezvous service URL for a relay session: an explicitly
+## configured URL wins, otherwise it is derived from the relay address using
+## [constant CollabConstants.DEFAULT_RENDEZVOUS_PORT] (the port the bundled
+## rendezvous listens on).
+func _resolve_rendezvous_url(relay_endpoint: Dictionary) -> String:
+	var explicit: String = _settings.get_string(CollabSettings.KEY_RENDEZVOUS_URL, "").strip_edges()
+	if not explicit.is_empty():
+		return explicit
+	if not relay_endpoint.is_empty():
+		var host: String = str(relay_endpoint.get("host", "")).strip_edges()
+		if not host.is_empty():
+			return "http://%s:%d" % [host, CollabConstants.DEFAULT_RENDEZVOUS_PORT]
+	return ""
+
+
+## Parses "host", "host:port" or "udp://host:port" into {host, port}, or {} on error.
+func _parse_relay_address(text: String, default_port: int) -> Dictionary:
+	var value: String = text.strip_edges()
+	if value.begins_with("udp://"):
+		value = value.substr("udp://".length())
+	value = value.trim_suffix("/")
+	if value.is_empty():
+		return {}
+	var host: String = value
+	var port: int = default_port
+	if value.count(":") == 1:
+		var parts: PackedStringArray = value.split(":")
+		host = parts[0].strip_edges()
+		if not parts[1].is_valid_int():
+			return {}
+		port = int(parts[1])
+	if host.is_empty() or port <= 0 or port > 65535:
+		return {}
+	return {"host": host, "port": port}
+
+
+func _random_token() -> String:
+	var crypto := Crypto.new()
+	return Marshalls.raw_to_base64(crypto.generate_random_bytes(18)).replace("+", "").replace("/", "").replace("=", "")
 
 
 func _establish_invite(use_rendezvous: bool, port: int, mode: int) -> void:
@@ -314,9 +409,17 @@ func _on_rendezvous_registered(code: String, ok: bool, error: String) -> void:
 	if ok:
 		_set_invite(code)
 		_dock.push_message("Invitation code '%s' registered." % code, false)
-	else:
-		_dock.push_message("Rendezvous registration failed (%s). Using a direct invitation code." % error, true)
-		_fallback_to_direct_invite(_settings.get_string(CollabSettings.KEY_DIRECT_ADVERTISE_HOST, ""), _coordinator.host_port, _coordinator.workspace_mode)
+		return
+	if _coordinator.relay_enabled:
+		# Fall back to the long relay code, which still reaches the host through
+		# the relay (and embeds the rendezvous URL for later short codes).
+		_set_invite(CollabInviteCode.encode_relay(
+			_coordinator.relay_address, _coordinator.relay_port, _coordinator.relay_room,
+			_coordinator.session_token, _project_id(), _coordinator.workspace_mode, _relay_rendezvous_url))
+		_dock.push_message("Rendezvous registration failed (%s). Sharing a long relay code instead." % error, true)
+		return
+	_dock.push_message("Rendezvous registration failed (%s). Using a direct invitation code." % error, true)
+	_fallback_to_direct_invite(_settings.get_string(CollabSettings.KEY_DIRECT_ADVERTISE_HOST, ""), _coordinator.host_port, _coordinator.workspace_mode)
 
 
 func _on_join_requested(invite: String) -> void:
@@ -342,8 +445,43 @@ func _on_join_requested(invite: String) -> void:
 	var host: String = str(parsed.get("host", ""))
 	var port: int = int(parsed.get("port", 0))
 	var token: String = str(parsed.get("token", ""))
-	_coordinator.require_token = not token.is_empty()
+	_coordinator.require_token = not token.is_empty() or kind == "relay"
+	if kind == "relay":
+		# Auto-configure from the long code so the client is ready for future
+		# sessions, including short codes, without manual setup.
+		_settings.set_value(CollabSettings.KEY_USE_RELAY, true)
+		_settings.set_value(CollabSettings.KEY_RELAY_ADDRESS, host)
+		if port > 0:
+			_settings.set_value(CollabSettings.KEY_RELAY_PORT, port)
+		var rendezvous_url: String = str(parsed.get("rendezvous_url", "")).strip_edges()
+		if not rendezvous_url.is_empty():
+			_settings.set_value(CollabSettings.KEY_RENDEZVOUS_URL, rendezvous_url)
+			_rendezvous.set_base_url(rendezvous_url)
+			_relay_rendezvous_url = rendezvous_url
+		if _dock != null:
+			_dock.set_relay_config(true, host, port)
+			if not rendezvous_url.is_empty():
+				_dock.set_rendezvous_url(rendezvous_url)
+				_dock.push_message("Configured rendezvous service from the invitation; short codes will work.", false)
+		_join_relay(host, port, str(parsed.get("room", "")), token, int(parsed.get("mode", CollabConstants.WorkspaceMode.HOST_WORKSPACE)))
+		return
 	_join_endpoint(host, port, token, int(parsed.get("mode", CollabConstants.WorkspaceMode.HOST_WORKSPACE)))
+
+
+## Joins a session through a relay server using the endpoint and room embedded in
+## a `gc2.` invitation.
+func _join_relay(host: String, port: int, room: String, token: String, mode: int) -> void:
+	if host.is_empty() or port <= 0 or room.is_empty():
+		_dock.push_message("Invalid relay invitation (missing endpoint or room).", true)
+		return
+	_coordinator.workspace_mode = mode
+	_dock.set_connection_status(CollabConstants.ConnectionState.CONNECTING, "Joining relay room %s" % room)
+	_dock.set_connectivity(CollabConstants.ConnectivityState.RELAY, "relay %s:%d, room %s" % [host, port, room])
+	_dock.push_message("Joining relay room %s via %s:%d..." % [room, host, port], false)
+	var err: Error = _coordinator.join_via_relay(host, port, room, token, mode)
+	if err != OK:
+		_dock.set_connection_status(CollabConstants.ConnectionState.DISCONNECTED, "Not connected")
+		_dock.push_message("Failed to reach relay %s:%d: %s" % [host, port, error_string(err)], true)
 
 
 func _on_rendezvous_lookup(code: String, ok: bool, data: Dictionary, error: String) -> void:
@@ -352,6 +490,14 @@ func _on_rendezvous_lookup(code: String, ok: bool, data: Dictionary, error: Stri
 	_pending_lookup = false
 	if not ok:
 		_dock.push_message("Could not resolve '%s': %s" % [code, error], true)
+		return
+	if str(data.get("kind", "")) == "relay" or not str(data.get("relay_host", "")).is_empty():
+		_join_relay(
+			str(data.get("relay_host", "")),
+			int(data.get("relay_port", 0)),
+			str(data.get("room", "")),
+			str(data.get("token", "")),
+			int(data.get("mode", CollabConstants.WorkspaceMode.HOST_WORKSPACE)))
 		return
 	_join_endpoint(str(data.get("host", "")), int(data.get("port", 0)), str(data.get("token", "")), int(data.get("mode", CollabConstants.WorkspaceMode.HOST_WORKSPACE)))
 
@@ -643,6 +789,34 @@ func _editor_viewport_3d() -> SubViewport:
 	return _editor.get_editor_viewport_3d()
 
 
+func _editor_viewport_2d() -> SubViewport:
+	if _editor == null:
+		return null
+	return _editor.get_editor_viewport_2d() as SubViewport
+
+
+## Returns the active editor drag-and-drop payload, if any. The editor keeps the
+## drag data on the viewport that is currently receiving the drag, so we probe
+## the root viewport and both editor viewports.
+func _drag_data() -> Variant:
+	var root_viewport: Viewport = get_viewport()
+	if root_viewport != null:
+		var data: Variant = root_viewport.gui_get_drag_data()
+		if _is_drag(data):
+			return data
+	for viewport in [_editor_viewport_3d(), _editor_viewport_2d()]:
+		if viewport == null:
+			continue
+		var viewport_data: Variant = (viewport as Viewport).gui_get_drag_data()
+		if _is_drag(viewport_data):
+			return viewport_data
+	return null
+
+
+func _is_drag(data: Variant) -> bool:
+	return typeof(data) == TYPE_DICTIONARY and not (data as Dictionary).is_empty()
+
+
 func _save_scene() -> int:
 	if _editor == null:
 		return FAILED
@@ -826,15 +1000,43 @@ func _forward_3d_gui_input(viewport_camera: Camera3D, event: InputEvent) -> int:
 		return EditorPlugin.AFTER_GUI_INPUT_PASS
 	var motion: InputEventMouseMotion = event as InputEventMouseMotion
 	if motion == null:
+		var button: InputEventMouseButton = event as InputEventMouseButton
+		if button != null:
+			_presence.note_local_button(button.button_mask)
 		return EditorPlugin.AFTER_GUI_INPUT_PASS
 	var viewport_3d: SubViewport = _editor_viewport_3d()
 	if viewport_3d == null:
 		return EditorPlugin.AFTER_GUI_INPUT_PASS
-	_presence.sample_local_cursor(viewport_camera, motion.position, Vector2(viewport_3d.size), _attached_scene_id)
+	_presence.sample_local_cursor(viewport_camera, motion.position, Vector2(viewport_3d.size), _attached_scene_id, motion.button_mask)
 	return EditorPlugin.AFTER_GUI_INPUT_PASS
 
 
-## Paints remote cursors over the 3D viewport.
-func _forward_3d_draw_over_viewport(viewport_control: Control) -> void:
+## Observes mouse motion over the 2D editor view to derive the local 2D cursor.
+## Always returns false so normal editor interaction is untouched.
+func _forward_canvas_gui_input(event: InputEvent) -> bool:
+	if _presence == null or _coordinator == null:
+		return false
+	if not _coordinator.session_manager.is_active():
+		return false
+	var motion: InputEventMouseMotion = event as InputEventMouseMotion
+	if motion == null:
+		var button: InputEventMouseButton = event as InputEventMouseButton
+		if button != null:
+			_presence.note_local_button(button.button_mask)
+		return false
+	var viewport_2d: SubViewport = _editor_viewport_2d()
+	if viewport_2d == null:
+		return false
+	var canvas_pos: Vector2 = viewport_2d.get_canvas_transform().affine_inverse() * motion.position
+	var normalized: Vector2 = Vector2(
+		clampf(motion.position.x / maxf(1.0, float(viewport_2d.size.x)), 0.0, 1.0),
+		clampf(motion.position.y / maxf(1.0, float(viewport_2d.size.y)), 0.0, 1.0)
+	)
+	_presence.sample_local_cursor_2d(canvas_pos, normalized, _attached_scene_id, motion.button_mask)
+	return false
+
+
+## Paints remote 2D cursors over the 2D editor viewport.
+func _forward_canvas_draw_over_viewport(viewport_control: Control) -> void:
 	if _presence != null:
-		_presence.draw_overlay(viewport_control)
+		_presence.draw_overlay_2d(viewport_control)

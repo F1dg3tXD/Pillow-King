@@ -15,6 +15,9 @@ const KEY_AUTO_CONNECT_LAST: String = SETTING_ROOT + "/identity/auto_connect_las
 const KEY_PORT: String = SETTING_ROOT + "/network/udp_port"
 const KEY_MAX_PEERS: String = SETTING_ROOT + "/network/max_peers"
 const KEY_RENDEZVOUS_URL: String = SETTING_ROOT + "/network/rendezvous_url"
+const KEY_USE_RELAY: String = SETTING_ROOT + "/network/use_relay"
+const KEY_RELAY_ADDRESS: String = SETTING_ROOT + "/network/relay_address"
+const KEY_RELAY_PORT: String = SETTING_ROOT + "/network/relay_port"
 const KEY_DIRECT_ADVERTISE_HOST: String = SETTING_ROOT + "/network/advertise_host"
 const KEY_ENABLE_UPNP: String = SETTING_ROOT + "/network/enable_upnp"
 const KEY_CURSOR_LABEL_KEY: String = SETTING_ROOT + "/cursors/show_labels"
@@ -49,12 +52,15 @@ func register_defaults() -> void:
 	_register(KEY_AUTO_CONNECT_LAST, false, TYPE_BOOL, "Reconnect to the last session on editor start.")
 	_register(KEY_PORT, CollabConstants.DEFAULT_PORT, TYPE_INT, "UDP port used when hosting.")
 	_register(KEY_MAX_PEERS, CollabConstants.DEFAULT_MAX_PEERS, TYPE_INT, "Maximum number of remote peers.", 1, 64)
-	_register(KEY_RENDEZVOUS_URL, CollabConstants.DEFAULT_RENDEZVOUS_URL, TYPE_STRING, "Rendezvous service used to resolve invitation codes.")
+	_register(KEY_RENDEZVOUS_URL, CollabConstants.DEFAULT_RENDEZVOUS_URL, TYPE_STRING, "Rendezvous service URL for short invitation codes. Leave blank to auto-derive it from the relay address (http://<relay-host>:9080).")
+	_register(KEY_USE_RELAY, true, TYPE_BOOL, "Connect through the relay server (default). Both sides dial out to it, so no port forwarding is needed. Uncheck to host directly on a LAN instead.")
+	_register(KEY_RELAY_ADDRESS, "", TYPE_STRING, "Relay server address (host or host:port). Required when relay mode is enabled.")
+	_register(KEY_RELAY_PORT, CollabConstants.DEFAULT_RELAY_PORT, TYPE_INT, "Relay server UDP port used when the address has no explicit port.", 1, 65535)
 	_register(KEY_DIRECT_ADVERTISE_HOST, "", TYPE_STRING, "Public IP/hostname advertised in invitation codes (blank = auto).")
 	_register(KEY_ENABLE_UPNP, false, TYPE_BOOL, "Attempt automatic UPnP UDP port forwarding when hosting.")
 	_register(KEY_CURSOR_LABEL_KEY, true, TYPE_BOOL, "Draw usernames next to remote cursors.")
-	_register(KEY_CURSOR_SIZE_KEY, 8.0, TYPE_FLOAT, "Remote cursor marker size in pixels.", 2.0, 64.0)
-	_register(KEY_CURSOR_DEPTH_KEY, 12.0, TYPE_FLOAT, "Distance along the remote camera ray (world units) at which the marker is drawn.", 0.1, 500.0)
+	_register(KEY_CURSOR_SIZE_KEY, 8.0, TYPE_FLOAT, "Size of the remote 2D cursor sprite in pixels (8 = native sprite size).", 2.0, 64.0)
+	_register(KEY_CURSOR_DEPTH_KEY, 12.0, TYPE_FLOAT, "Distance along the remote camera ray (world units) at which the 3D cursor sprite is drawn.", 0.1, 500.0)
 	_register(KEY_CURSOR_3D_MARKERS, true, TYPE_BOOL, "Show a live 3D marker for each remote participant in the editor viewport.")
 	_register(KEY_CURSOR_3D_SCALE, 1.0, TYPE_FLOAT, "Scale of the remote participant 3D markers.", 0.1, 20.0)
 	_register(KEY_AUTOSAVE, false, TYPE_BOOL, "Automatically save the shared scene after inactivity.")

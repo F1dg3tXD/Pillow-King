@@ -11,7 +11,9 @@ extends RefCounted
 ## rejected during the handshake instead of being allowed to desync.
 ## v2: scene operations are scene-id aware, and workspace (file/scene) requests
 ## and scene-focus broadcasts were added.
-const PROTOCOL_VERSION: int = 3
+## v4: cursor updates carry an explicit view ("3d"/"2d") and animation state;
+## 2D cursors send a canvas-space position instead of a camera ray.
+const PROTOCOL_VERSION: int = 4
 
 ## Magic marker placed at the front of every packet so garbage/foreign traffic
 ## is discarded before it reaches the decoder. Declared as a static var because
@@ -33,6 +35,9 @@ const MAX_TRANSFER_CHUNK: int = 512 * 1024 # 512 KiB
 ## Default UDP port used when hosting.
 const DEFAULT_PORT: int = 45899
 
+## Default UDP port used by the dedicated relay server.
+const DEFAULT_RELAY_PORT: int = 45900
+
 ## Default maximum number of simultaneous remote peers.
 const DEFAULT_MAX_PEERS: int = 8
 
@@ -43,6 +48,12 @@ const DEFAULT_MAX_PEERS: int = 8
 ## Settings (`godot_collab/network/rendezvous_url`).
 const DEFAULT_RENDEZVOUS_URL: String = ""
 
+## Default TCP port the bundled rendezvous service listens on. The relay Docker
+## image runs the relay and this rendezvous together, so a relay session can also
+## register a short code. When no explicit rendezvous URL is configured the host
+## derives one from the relay address using this port.
+const DEFAULT_RENDEZVOUS_PORT: int = 9080
+
 ## Session invitation codes expire after this many seconds unless refreshed.
 const INVITE_TTL_SECONDS: int = 600
 
@@ -51,6 +62,23 @@ const RENDEZVOUS_REFRESH_SECONDS: float = 120.0
 
 ## Cursor updates are unreliable and rate limited on the sending side.
 const CURSOR_SEND_HZ: float = 25.0
+
+## Remote cursors are given this long (seconds) after the last local mouse
+## motion before their animation relaxes from "hovering" to "idle".
+const CURSOR_HOVER_HOLD_SECONDS: float = 0.2
+
+## Cursor sprite animation names. These must match the animations authored in
+## `addons/godot_collab/assets/cursor_sprites.tres`.
+const CURSOR_ANIM_IDLE: String = "idle"
+const CURSOR_ANIM_HOVER: String = "idle_hover"
+const CURSOR_ANIM_GRAB: String = "grab"
+const CURSOR_ANIM_FILE_SCRIPT: String = "grab_file_script"
+const CURSOR_ANIM_FILE_MATERIAL: String = "grab_file_material"
+const CURSOR_ANIM_FILE_OBJECT: String = "grab_file_object"
+
+## Cursor view identifiers carried on the wire.
+const CURSOR_VIEW_3D: String = "3d"
+const CURSOR_VIEW_2D: String = "2d"
 
 ## Remote cursors older than this are hidden (seconds).
 const CURSOR_STALE_SECONDS: float = 3.0
@@ -125,5 +153,5 @@ enum ConnectivityState {
 	UNKNOWN = 0, ## Not verified yet.
 	LAN_ONLY = 1, ## Reachable only inside the local network.
 	DIRECT = 2, ## Externally reachable (UPnP mapped / manual forward).
-	RELAY = 3, ## Reserved for a future relay path.
+	RELAY = 3, ## Reached through a dedicated relay server (works behind NAT).
 }
