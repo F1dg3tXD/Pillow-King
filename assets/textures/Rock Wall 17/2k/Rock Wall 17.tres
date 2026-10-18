@@ -1,0 +1,18 @@
+[gd_resource type="StandardMaterial3D" format=3 uid="uid://lft35drbv2tk"]
+
+[ext_resource type="Texture2D" uid="uid://br1rpola28rri" path="res://assets/textures/Rock Wall 17/2k/textures/rock_wall_17_diff_2k.png" id="1_x3jl1"]
+[ext_resource type="Texture2D" uid="uid://mhkoys4geaem" path="res://assets/textures/Rock Wall 17/2k/textures/rock_wall_17_ao_2k.png" id="2_kghpl"]
+[ext_resource type="Texture2D" uid="uid://bt67wy72njiwa" path="res://assets/textures/Rock Wall 17/2k/textures/rock_wall_17_disp_2k.png" id="3_4eufk"]
+[ext_resource type="Texture2D" uid="uid://bhlcwsjtp04pk" path="res://assets/textures/Rock Wall 17/2k/textures/rock_wall_17_nor_gl_2k.png" id="4_32d1v"]
+[ext_resource type="Texture2D" uid="uid://e13lojf3pcou" path="res://assets/textures/Rock Wall 17/2k/textures/rock_wall_17_rough_2k.png" id="5_3m771"]
+
+[resource]
+albedo_texture = ExtResource("1_x3jl1")
+roughness_texture = ExtResource("5_3m771")
+normal_enabled = true
+normal_texture = ExtResource("4_32d1v")
+ao_enabled = true
+ao_texture = ExtResource("2_kghpl")
+heightmap_enabled = true
+heightmap_texture = ExtResource("3_4eufk")
+heightmap_flip_texture = true
