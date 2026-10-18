@@ -7,7 +7,7 @@
 class_name CollabDock
 extends VBoxContainer
 
-signal host_requested(username: String, port: int, mode: int, use_rendezvous: bool)
+signal host_requested(username: String, port: int, mode: int, use_rendezvous: bool, use_relay: bool)
 signal join_requested(invite: String)
 signal disconnect_requested()
 signal approve_requested(peer_id: int)
@@ -38,6 +38,8 @@ var _username_edit: LineEdit
 var _port_spin: SpinBox
 var _mode_option: OptionButton
 var _rendezvous_check: CheckBox
+var _relay_check: CheckBox
+var _relay_address_edit: LineEdit
 var _approve_check: CheckBox
 var _status_label: Label
 var _connectivity_label: Label
@@ -82,6 +84,8 @@ func setup(settings: CollabSettings) -> void:
 	_username_edit.text = settings.get_string(CollabSettings.KEY_USERNAME, "")
 	_port_spin.value = settings.get_int(CollabSettings.KEY_PORT, CollabConstants.DEFAULT_PORT)
 	_rendezvous_check.button_pressed = settings.get_string(CollabSettings.KEY_RENDEZVOUS_URL, "").is_empty() == false
+	_relay_check.button_pressed = settings.get_bool(CollabSettings.KEY_USE_RELAY, true)
+	_relay_address_edit.text = settings.get_string(CollabSettings.KEY_RELAY_ADDRESS, "")
 	_approve_check.button_pressed = settings.get_bool(CollabSettings.KEY_APPROVE_JOINS, false)
 	_transfer_dir_edit.text = settings.get_string(CollabSettings.KEY_TRANSFER_DIR, "")
 
@@ -151,15 +155,29 @@ func _build() -> void:
 	session_box.add_child(_row("UDP port", _port_spin))
 
 	_rendezvous_check = CheckBox.new()
-	_rendezvous_check.text = "Use rendezvous for a short invite code"
-	_rendezvous_check.tooltip_text = "Requires a reachable rendezvous service. Otherwise a direct code is used."
+	_rendezvous_check.text = "Register a short invite code (uses the bundled rendezvous)"
+	_rendezvous_check.tooltip_text = "Asks the rendezvous service for a short code (like AB12CD). Clients using it must configure the rendezvous URL. Works with or without relay mode."
 	session_box.add_child(_rendezvous_check)
+
+	_relay_check = CheckBox.new()
+	_relay_check.text = "Use a relay server (recommended for the internet)"
+	_relay_check.tooltip_text = "Both sides connect outbound to a relay server, which forwards traffic. No port forwarding needed. Works behind NAT/CGNAT; can be combined with a short invite code."
+	_relay_check.toggled.connect(func(_pressed: bool) -> void: _update_relay_controls())
+	session_box.add_child(_relay_check)
+
+	_relay_address_edit = LineEdit.new()
+	_relay_address_edit.placeholder_text = "Relay address: host or host:port (default port %d)" % CollabConstants.DEFAULT_RELAY_PORT
+	_relay_address_edit.tooltip_text = "Address of the bundled relay+rendezvous server (see tools/relay_server)."
+	session_box.add_child(_relay_address_edit)
+	_update_relay_controls()
 
 	_approve_check = CheckBox.new()
 	_approve_check.text = "Require host approval for new participants"
 	session_box.add_child(_approve_check)
 
 	session_box.add_child(_hint("Host, Join, Copy Code, Request Snapshot and Disconnect are in the top toolbar."))
+	session_box.add_child(_hint("Relay mode: the invitation embeds the relay endpoint + room, so joining works without a reachable host port. A long code also embeds the rendezvous URL, so pasting it sets the client up for short codes."))
+	session_box.add_child(_hint("Advanced: uncheck relay to host directly on a LAN (a reachable host port is required)."))
 
 	var invite_box := _section("Invitation code")
 	_invite_view = TextEdit.new()
@@ -421,11 +439,51 @@ func _on_host_pressed() -> void:
 	var username: String = _username_edit.text.strip_edges()
 	var port: int = int(_port_spin.value)
 	var mode: int = _mode_option.get_selected_id()
+	var use_relay: bool = _relay_check.button_pressed
 	var use_rendezvous: bool = _rendezvous_check.button_pressed
+	if use_relay and _relay_address_edit.text.strip_edges().is_empty():
+		push_message("No relay server configured; hosting directly. Enter a relay address to host over the internet.", true)
+		use_relay = false
+		_relay_check.button_pressed = false
+		_update_relay_controls()
 	if _settings != null:
 		_settings.set_value(CollabSettings.KEY_PORT, port)
 		_settings.set_value(CollabSettings.KEY_APPROVE_JOINS, _approve_check.button_pressed)
-	host_requested.emit(username, port, mode, use_rendezvous)
+		_settings.set_value(CollabSettings.KEY_USE_RELAY, use_relay)
+		_settings.set_value(CollabSettings.KEY_RELAY_ADDRESS, _relay_address_edit.text.strip_edges())
+	host_requested.emit(username, port, mode, use_rendezvous, use_relay)
+
+
+## Enables/disables the relay address field. Rendezvous (short codes) can be
+## combined with relay mode, so it is not toggled here.
+func _update_relay_controls() -> void:
+	if _relay_address_edit == null:
+		return
+	var relay: bool = _relay_check.button_pressed
+	_relay_address_edit.editable = relay
+	_relay_address_edit.visible = relay
+
+
+## Reflects relay settings pushed by the plugin (for example after a client
+## pastes a long relay invitation that auto-configures the endpoint).
+func set_relay_config(use_relay: bool, host: String, port: int) -> void:
+	if _relay_check == null:
+		return
+	_relay_check.button_pressed = use_relay
+	if _relay_address_edit != null:
+		if host.strip_edges().is_empty():
+			_relay_address_edit.text = ""
+		else:
+			_relay_address_edit.text = host if port == CollabConstants.DEFAULT_RELAY_PORT else "%s:%d" % [host, port]
+	_update_relay_controls()
+
+
+## Reflects a rendezvous URL auto-configured from an invitation.
+func set_rendezvous_url(url: String) -> void:
+	if _rendezvous_check == null:
+		return
+	if not url.strip_edges().is_empty():
+		_rendezvous_check.button_pressed = true
 
 
 func _on_join_pressed() -> void:

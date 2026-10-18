@@ -250,22 +250,28 @@ func _test_id_reconciliation() -> void:
 func _init() -> void:
 	print("== Godot Collab headless tests ==")
 	_test_protocol()
+	_test_relay_protocol()
 	_test_invite_codes()
 	_test_path_guard()
 	_test_rate_limiter()
 	_test_node_id_map()
 	_test_property_values()
 	_test_inline_resource_safety()
+	_test_resource_content_sync()
+	_test_deep_resource_watch()
 	_test_pending_resource_resolution()
 	_test_settings_defaults()
 	_test_filesync_paths()
 	_test_id_reconciliation()
 	_test_loopback_session()
+	_test_relay_session()
+	_test_relay_token_rejection()
 	_test_scene_sync_loopback()
 	_test_general_property_sync()
 	_test_workspace_rename_delete_loopback()
 	_test_rejoin_desync()
 	_test_multi_scene_isolation()
+	_test_cursor_state()
 	_test_marker_manager()
 	# The marker test needs a live frame so the node's ready/deferred calls run.
 	_run_marker_test_then_finish()
@@ -301,6 +307,102 @@ func _test_inline_resource_safety() -> void:
 	_check(CollabSceneOperations.decode_value(kind, "") == null, "empty inline payload is refused")
 	var oversized: String = "x".repeat(CollabSceneOperations.MAX_INLINE_RESOURCE_TEXT + 1)
 	_check(CollabSceneOperations.decode_value(kind, oversized) == null, "oversized inline payload is refused")
+
+
+## File-backed resources must carry their serialised content, not just their
+## path, so in-memory property edits travel even when the receiver already has
+## (a stale copy of) the file. Containers that hold resources must round-trip too.
+func _test_resource_content_sync() -> void:
+	print("[resource content sync]")
+	var mat := StandardMaterial3D.new()
+	mat.take_over_path("res://collab_content_mat.tres")
+	mat.albedo_color = Color(0.2, 0.3, 0.4)
+	var encoded: Dictionary = CollabSceneOperations.encode_value(mat)
+	_check(str(encoded.get("kind", "")) == CollabSceneOperations.VALUE_RESOURCE_CONTENT, "path-backed resource encodes as content")
+	var payload: Dictionary = encoded.get("value", {})
+	_check(str(payload.get("path", "")) == "res://collab_content_mat.tres", "content carries the resource path")
+	_check(not str(payload.get("text", "")).is_empty(), "content carries serialised text")
+	var rebuilt: Resource = CollabSceneOperations.decode_value(str(encoded["kind"]), encoded["value"])
+	_check(rebuilt is StandardMaterial3D and (rebuilt as StandardMaterial3D).albedo_color.is_equal_approx(Color(0.2, 0.3, 0.4)), "content payload rebuilds the resource")
+
+	# Merging onto an equivalent local instance must keep that instance alive so
+	# every reference to it stays valid.
+	var existing := StandardMaterial3D.new()
+	existing.take_over_path("res://collab_content_mat.tres")
+	existing.albedo_color = Color(0, 0, 0)
+	var merged: Resource = CollabSceneOperations.apply_resource_content(
+		str(payload["path"]), str(payload["text"]), existing)
+	_check(merged == existing, "content is merged onto the existing instance in place")
+	_check(existing.albedo_color.is_equal_approx(Color(0.2, 0.3, 0.4)), "merged instance takes the incoming colour")
+
+	# Signature must change when an in-place edit happens, so the deep scan fires.
+	var sig_before: String = CollabSceneOperations.deep_signature(existing)
+	existing.albedo_color = Color(0.9, 0.9, 0.1)
+	_check(CollabSceneOperations.deep_signature(existing) != sig_before, "deep signature reflects an in-place edit")
+
+	# Arrays/dictionaries that hold resources cannot use the plain kinds.
+	var array_value: Array = [mat, 5, "x"]
+	var array_encoded: Dictionary = CollabSceneOperations.encode_value(array_value)
+	_check(str(array_encoded.get("kind", "")) == CollabSceneOperations.VALUE_ARRAY_ENCODED, "resource array uses the encoded kind")
+	var array_decoded: Variant = CollabSceneOperations.decode_value(str(array_encoded["kind"]), array_encoded["value"])
+	_check(typeof(array_decoded) == TYPE_ARRAY and (array_decoded as Array).size() == 3, "encoded array rebuilds with its size")
+	_check((array_decoded as Array)[0] is StandardMaterial3D, "array element resource is rebuilt")
+	_check((array_decoded as Array)[1] == 5 and (array_decoded as Array)[2] == "x", "array plain elements survive")
+
+	var dict_value: Dictionary = {"mesh": mat, "count": 2}
+	var dict_encoded: Dictionary = CollabSceneOperations.encode_value(dict_value)
+	_check(str(dict_encoded.get("kind", "")) == CollabSceneOperations.VALUE_DICTIONARY_ENCODED, "resource dictionary uses the encoded kind")
+	var dict_decoded: Variant = CollabSceneOperations.decode_value(str(dict_encoded["kind"]), dict_encoded["value"])
+	_check(typeof(dict_decoded) == TYPE_DICTIONARY and (dict_decoded as Dictionary).get("count") == 2, "encoded dictionary keeps plain entries")
+	_check((dict_decoded as Dictionary).get("mesh") is StandardMaterial3D, "dictionary resource value is rebuilt")
+
+	_check(CollabSceneOperations.requires_deep_scan(mat), "resources require the deep scan")
+	_check(CollabSceneOperations.requires_deep_scan(array_value), "resource containers require the deep scan")
+	_check(not CollabSceneOperations.requires_deep_scan([1, 2, 3]), "plain arrays do not require the deep scan")
+
+
+## The watcher must notice an in-place edit of a path-backed resource (whose
+## cheap path signature never changes) and emit a content property operation.
+func _test_deep_resource_watch() -> void:
+	print("[deep resource watch]")
+	var ids := CollabNodeIdMap.new()
+	var watcher := CollabDiffWatcher.new()
+	watcher.setup(ids)
+	watcher.enabled = true
+	watcher.is_host = true
+	watcher.scene_id = "res://watch.tscn"
+
+	var root := Node3D.new()
+	root.name = "Root"
+	var mesh := MeshInstance3D.new()
+	mesh.name = "Mesh"
+	root.add_child(mesh)
+	var mat := StandardMaterial3D.new()
+	mat.take_over_path("res://collab_watch_mat.tres")
+	mat.albedo_color = Color(1, 0, 0)
+	mesh.material_override = mat
+	watcher.set_root(root)
+
+	var ops: Array = []
+	watcher.operations_detected.connect(func(detected: Array) -> void: ops.append_array(detected))
+
+	# First pass only anchors the content signature.
+	watcher._last_scan_ms = -100000
+	watcher._deep_last_ms = -100000
+	watcher.poll()
+	_check(ops.is_empty(), "anchoring the path-backed resource emits nothing")
+
+	mat.albedo_color = Color(0, 1, 0)
+	watcher._last_scan_ms = -100000
+	watcher._deep_last_ms = -100000
+	watcher.poll()
+	var found: bool = false
+	for op in ops:
+		if typeof(op) == TYPE_DICTIONARY and str((op as Dictionary).get("property", "")) == "material_override" and str((op as Dictionary).get("value_kind", "")) == CollabSceneOperations.VALUE_RESOURCE_CONTENT:
+			found = true
+	_check(found, "in-place edit of a path-backed resource emits a content operation")
+
+	root.free()
 
 
 ## A path-backed resource reference that arrives before its file (the classic
@@ -371,9 +473,11 @@ func _test_pending_resource_resolution() -> void:
 
 func _test_settings_defaults() -> void:
 	print("[settings defaults]")
-	# A fresh install must be usable on a LAN without any service or approval
-	# step; both are opt-in.
-	_check(CollabConstants.DEFAULT_RENDEZVOUS_URL.is_empty(), "rendezvous defaults to empty (LAN/direct connect)")
+	# Registered defaults live in EditorSettings (unavailable headless); these
+	# assertions cover the constants and the call-site fallbacks instead.
+	_check(CollabConstants.DEFAULT_RENDEZVOUS_URL.is_empty(), "rendezvous defaults to empty (relay-derived or configured)")
+	_check(CollabConstants.DEFAULT_RELAY_PORT == 45900, "relay default port is 45900")
+	_check(CollabConstants.DEFAULT_RENDEZVOUS_PORT == 9080, "rendezvous default port is 9080")
 	_check(not CollabSettings.new().get_bool(CollabSettings.KEY_APPROVE_JOINS, false), "host approval defaults to off")
 	# A single dropped file is delivered in one workspace packet, so the per-file
 	# cap must not exceed the packet cap.
@@ -397,10 +501,21 @@ func _test_protocol() -> void:
 	var truncated: PackedByteArray = bytes.slice(0, CollabConstants.HEADER_SIZE - 2)
 	_check(not bool(CollabProtocol.decode(truncated).get("ok", true)), "truncated packet rejected")
 
-	# CURSOR_UPDATE requires transform fields.
+	# CURSOR_UPDATE requires an explicit view and the fields for that view.
 	var bad_cursor: PackedByteArray = CollabProtocol.encode(CollabProtocol.MessageType.CURSOR_UPDATE, {"time_ms": 1})
 	var bad_decoded: Dictionary = CollabProtocol.decode(bad_cursor)
 	_check(not bool(bad_decoded.get("ok", true)), "cursor payload validated")
+	var bad_view: PackedByteArray = CollabProtocol.encode(CollabProtocol.MessageType.CURSOR_UPDATE, {"view": "nope"})
+	_check(not bool(CollabProtocol.decode(bad_view).get("ok", true)), "unknown cursor view rejected")
+	var bad_2d: PackedByteArray = CollabProtocol.encode(CollabProtocol.MessageType.CURSOR_UPDATE, {"view": CollabConstants.CURSOR_VIEW_2D, "viewport_pos": Vector2(0.5, 0.5)})
+	_check(not bool(CollabProtocol.decode(bad_2d).get("ok", true)), "2D cursor requires a canvas position")
+	var good_2d: PackedByteArray = CollabProtocol.encode(CollabProtocol.MessageType.CURSOR_UPDATE, {
+		"view": CollabConstants.CURSOR_VIEW_2D,
+		"canvas_pos": Vector2(12.0, 34.0),
+		"viewport_pos": Vector2(0.5, 0.5),
+		"anim": CollabConstants.CURSOR_ANIM_GRAB,
+	})
+	_check(bool(CollabProtocol.decode(good_2d).get("ok", false)), "2D cursor payload validated")
 
 	# Workspace authoring messages are accepted with a valid shape...
 	var workspace: PackedByteArray = CollabProtocol.encode(CollabProtocol.MessageType.WORKSPACE_REQUEST, {
@@ -455,6 +570,42 @@ func _test_protocol() -> void:
 	_check(not bool(CollabProtocol.decode(bad_file_remove).get("ok", true)), "file remove rejects non-string path")
 
 
+func _test_relay_protocol() -> void:
+	print("[relay protocol]")
+	var register: PackedByteArray = CollabRelayProtocol.encode_register("AB12CD", CollabRelayProtocol.Role.HOST, "tok", 8)
+	var decoded: Dictionary = CollabRelayProtocol.decode(register)
+	_check(bool(decoded.get("ok", false)), "register decodes")
+	_check(int(decoded.get("kind", 0)) == CollabRelayProtocol.Kind.REGISTER, "register kind")
+	_check(str(decoded.get("room", "")) == "AB12CD", "register room")
+	_check(int(decoded.get("role", -1)) == CollabRelayProtocol.Role.HOST, "register role")
+	_check(str(decoded.get("token", "")) == "tok", "register token")
+	_check(int(decoded.get("max_peers", 0)) == 8, "register max peers")
+
+	var registered: Dictionary = CollabRelayProtocol.decode(CollabRelayProtocol.encode_registered(2, CollabRelayProtocol.HOST_APP_ID))
+	_check(int(registered.get("kind", 0)) == CollabRelayProtocol.Kind.REGISTERED, "registered kind")
+	_check(int(registered.get("peer_id", 0)) == 2, "registered app id")
+	_check(int(registered.get("host_id", 0)) == CollabRelayProtocol.HOST_APP_ID, "registered host id")
+
+	var member: Dictionary = CollabRelayProtocol.decode(CollabRelayProtocol.encode_member_join(3, CollabRelayProtocol.Role.CLIENT))
+	_check(int(member.get("kind", 0)) == CollabRelayProtocol.Kind.MEMBER_JOIN, "member join kind")
+	_check(int(member.get("peer_id", 0)) == 3, "member join id")
+
+	var app: PackedByteArray = CollabProtocol.encode(CollabProtocol.MessageType.PING, {"time_ms": 7})
+	var data: Dictionary = CollabRelayProtocol.decode(CollabRelayProtocol.encode_data(5, 1, app))
+	_check(int(data.get("kind", 0)) == CollabRelayProtocol.Kind.DATA, "data kind")
+	_check(int(data.get("origin", 0)) == 5, "data origin")
+	_check(int(data.get("dest", 0)) == 1, "data dest")
+	_check(bool(CollabProtocol.decode(data.get("data", PackedByteArray())).get("ok", false)), "data carries a valid app packet")
+
+	_check(not bool(CollabRelayProtocol.decode(PackedByteArray([1, 2, 3])).get("ok", true)), "short relay packet rejected")
+	var oversized: PackedByteArray = CollabRelayProtocol.MAGIC.duplicate()
+	oversized.append(CollabRelayProtocol.VERSION)
+	oversized.append(CollabRelayProtocol.Kind.DATA)
+	oversized.resize(CollabRelayProtocol.HEADER_SIZE)
+	oversized.encode_u32(6, CollabRelayProtocol.MAX_PAYLOAD + 1)
+	_check(not bool(CollabRelayProtocol.decode(oversized).get("ok", true)), "oversized relay payload rejected")
+
+
 func _test_invite_codes() -> void:
 	print("[invite codes]")
 	var invite: String = CollabInviteCode.encode_direct("192.168.1.5", 45899, "tok123", "proj-1", CollabConstants.WorkspaceMode.GIT_PRESENCE)
@@ -468,6 +619,17 @@ func _test_invite_codes() -> void:
 
 	var short: Dictionary = CollabInviteCode.decode("K7P2QX")
 	_check(str(short.get("kind", "")) == "short" and str(short.get("code", "")) == "K7P2QX", "short code parsed")
+
+	var relay_invite: String = CollabInviteCode.encode_relay("relay.example.net", 45900, "AB12CD", "tok123", "proj-1", CollabConstants.WorkspaceMode.HOST_WORKSPACE, "http://relay.example.net:9080")
+	_check(relay_invite.begins_with("gc2."), "relay invite prefixed")
+	var relay_parsed: Dictionary = CollabInviteCode.decode(relay_invite)
+	_check(str(relay_parsed.get("kind", "")) == "relay", "relay kind")
+	_check(str(relay_parsed.get("host", "")) == "relay.example.net", "relay host round-trips")
+	_check(int(relay_parsed.get("port", 0)) == 45900, "relay port round-trips")
+	_check(str(relay_parsed.get("room", "")) == "AB12CD", "relay room round-trips")
+	_check(str(relay_parsed.get("token", "")) == "tok123", "relay token round-trips")
+	_check(str(relay_parsed.get("rendezvous_url", "")) == "http://relay.example.net:9080", "relay rendezvous URL round-trips")
+	_check(str(CollabInviteCode.decode("gc2.not-base64!!").get("kind", "")) == "invalid", "corrupt relay invite rejected")
 
 	var address: Dictionary = CollabInviteCode.decode("10.0.0.2:45899")
 	_check(str(address.get("kind", "")) == "address", "address kind")
@@ -505,6 +667,28 @@ func _test_rate_limiter() -> void:
 	_check(allowed == 3, "burst limited to capacity (got %d)" % allowed)
 
 
+func _test_cursor_state() -> void:
+	print("[cursor state]")
+	var state := CollabCursorState.new()
+	_check(not state.has(5), "no sample for an unknown peer")
+	state.update(5, Transform3D(Basis(), Vector3(1.0, 2.0, 3.0)), Vector3.ZERO, Vector3(0.0, 0.0, -1.0), Vector2(0.5, 0.5), "res://a.tscn", CollabConstants.CURSOR_ANIM_HOVER)
+	_check(state.view(5) == CollabConstants.CURSOR_VIEW_3D, "3D sample is marked as 3D")
+	_check(state.anim(5) == CollabConstants.CURSOR_ANIM_HOVER, "3D sample keeps its animation")
+	_check(state.world_position(5).is_equal_approx(Vector3(0.0, 0.0, -12.0)), "world position is along the ray at the marker depth")
+	state.update_2d(5, Vector2(40.0, 50.0), Vector2(0.25, 0.75), "res://a.tscn", CollabConstants.CURSOR_ANIM_FILE_MATERIAL)
+	_check(state.view(5) == CollabConstants.CURSOR_VIEW_2D, "2D sample flips the view mode")
+	_check(state.canvas_pos(5).is_equal_approx(Vector2(40.0, 50.0)), "2D sample stores the canvas position")
+	_check(state.anim(5) == CollabConstants.CURSOR_ANIM_FILE_MATERIAL, "2D sample keeps its animation")
+	state.set_marker_depth(20.0)
+	state.update(6, Transform3D.IDENTITY, Vector3.ZERO, Vector3(0.0, 0.0, -1.0), Vector2(0.5, 0.5), "res://a.tscn")
+	_check(state.world_position(6).is_equal_approx(Vector3(0.0, 0.0, -20.0)), "marker depth is configurable")
+	_check(not state.is_stale(6, Time.get_ticks_msec()), "a fresh sample is not stale")
+	state.remove(6)
+	_check(not state.has(6), "remove drops the sample")
+	state.clear()
+	_check(not state.has(5), "clear drops all samples")
+
+
 func _test_marker_manager() -> void:
 	print("[marker manager]")
 	var logs := CollabLog.new()
@@ -530,14 +714,17 @@ func _test_marker_manager() -> void:
 	markers.set_local_scene_id("res://scene.tscn")
 
 	var camera := Transform3D(Basis(), Vector3(0.0, 5.0, 10.0))
-	state.update(2, camera, Vector3(0.0, 0.0, 0.0), Vector3(0.0, 0.0, -1.0), Vector2(0.5, 0.5), "res://scene.tscn")
+	state.update(2, camera, Vector3(0.0, 0.0, 0.0), Vector3(0.0, 0.0, -1.0), Vector2(0.5, 0.5), "res://scene.tscn", CollabConstants.CURSOR_ANIM_GRAB)
 	markers.poll()
 	_check(markers.has_marker(2), "a marker is created for a remote cursor")
 	_check(markers.marker_count() == 1, "exactly one marker per remote peer")
 	var created: Node = viewport.get_node_or_null("CollabUserMarkers/CollabPeer_2")
 	_check(created != null, "marker is parented into the editor viewport container")
-	if created is Node3D:
-		_check((created as Node3D).position.is_equal_approx(Vector3(0.0, 0.0, -12.0)), "marker sits at the configured depth along the remote ray")
+	if created is CollabUserMarker:
+		var marker: CollabUserMarker = created as CollabUserMarker
+		_check(marker.position.is_equal_approx(camera.origin), "marker body sits at the remote camera")
+		_check(marker.cursor_global_position().is_equal_approx(Vector3(0.0, 0.0, -12.0)), "cursor sprite sits at the configured depth along the remote ray")
+		_check(marker.cursor_animation() == &"grab", "remote animation is applied to the cursor sprite")
 
 	state.remove(2)
 	markers.poll()
@@ -546,6 +733,10 @@ func _test_marker_manager() -> void:
 	state.update(2, camera, Vector3(0.0, 0.0, 0.0), Vector3(0.0, 0.0, -1.0), Vector2(0.5, 0.5), "res://other.tscn")
 	markers.poll()
 	_check(not markers.has_marker(2), "marker hidden when the peer is editing another scene")
+
+	state.update_2d(2, Vector2(5.0, 6.0), Vector2(0.5, 0.5), "res://scene.tscn")
+	markers.poll()
+	_check(not markers.has_marker(2), "no 3D marker while the peer is in the 2D view")
 
 	coordinator.stop("cleanup")
 	markers.free()
@@ -571,6 +762,15 @@ func _test_marker_visuals() -> void:
 	var sphere: CSGSphere3D = marker.get_node_or_null("CSGSphere3D") as CSGSphere3D
 	_check(label != null, "marker exposes its username label")
 	_check(sphere != null, "marker exposes its sphere")
+	_check(marker.animated_sprite_3d != null, "marker exposes its 3D cursor sprite")
+	_check(marker.animated_sprite_2d != null, "marker exposes its 2D cursor sprite")
+	if marker.animated_sprite_3d != null:
+		_check(marker.animated_sprite_3d.sprite_frames != null, "cursor sprite has the shared SpriteFrames")
+	# Unknown animation names are ignored rather than crashing.
+	marker.set_cursor_animation("does_not_exist")
+	_check(marker.animated_sprite_3d != null and marker.animated_sprite_3d.animation != &"does_not_exist", "unknown animation name is ignored")
+	marker.set_cursor_animation(CollabConstants.CURSOR_ANIM_HOVER)
+	_check(marker.cursor_animation() == &"idle_hover", "known animation name is applied")
 
 	# Applying the default colour must be a no-op so loading the scene in the
 	# editor does not duplicate resources / mark it modified.
@@ -592,6 +792,8 @@ func _test_marker_visuals() -> void:
 	if sphere != null and sphere.material_override is StandardMaterial3D:
 		var mat: StandardMaterial3D = sphere.material_override as StandardMaterial3D
 		_check(mat.albedo_color.is_equal_approx(blue) and mat.emission.is_equal_approx(blue), "marker colour is applied to the material")
+	if marker.animated_sprite_3d != null:
+		_check(marker.animated_sprite_3d.modulate.is_equal_approx(Color(blue.r, blue.g, blue.b, 1.0)), "marker colour tints the cursor sprite")
 
 	root.remove_child(marker)
 	marker.free()
@@ -646,11 +848,13 @@ func _test_loopback_session() -> void:
 
 	if bool(state["client_joined"]):
 		client.send_cursor({
+			"view": CollabConstants.CURSOR_VIEW_3D,
 			"camera_transform": Transform3D.IDENTITY,
 			"ray_origin": Vector3.ZERO,
 			"ray_direction": Vector3.FORWARD,
 			"viewport_pos": Vector2(0.5, 0.5),
 			"scene_id": "",
+			"anim": CollabConstants.CURSOR_ANIM_IDLE,
 			"time_ms": Time.get_ticks_msec(),
 		})
 		var cursor_deadline: int = Time.get_ticks_msec() + 3000
@@ -674,6 +878,142 @@ func _test_loopback_session() -> void:
 	client.free()
 	host_manager.free()
 	client_manager.free()
+
+
+## Exercises the dedicated relay path end to end in-process: a relay server, a
+## relay-host manager and a relay-client manager. Verifies registration, HELLO
+## routing through the relay, cursor relay, token rejection and host departure.
+func _test_relay_session() -> void:
+	print("[relay session]")
+	var logs := CollabLog.new()
+	var relay_port: int = 45990
+	var room: String = "AB12CD"
+	var token: String = "secret-token"
+
+	var relay := CollabRelayServer.new(logs)
+	var relay_err: Error = relay.start(relay_port, 16)
+	_check(relay_err == OK, "relay server starts (%s)" % error_string(relay_err))
+
+	var host_manager := CollabSessionManager.new(logs)
+	var host := CollabSessionCoordinator.new()
+	host.setup(host_manager, logs)
+
+	var client_manager := CollabSessionManager.new(logs)
+	var client := CollabSessionCoordinator.new()
+	client.setup(client_manager, logs)
+
+	var state: Dictionary = {
+		"client_joined": false,
+		"client_saw_host": false,
+		"host_cursor_from_peer": -1,
+		"host_stopped": false,
+	}
+	client.session_started.connect(func(_is_host: bool) -> void: state["client_joined"] = true)
+	client.participants_changed.connect(func() -> void:
+		for p in client.registry.all():
+			if p.is_host:
+				state["client_saw_host"] = true)
+	host.cursor_received.connect(func(peer_id: int, _payload: Dictionary) -> void: state["host_cursor_from_peer"] = peer_id)
+
+	host.require_token = true
+	client.require_token = true
+	var err: Error = host.start_host_via_relay("127.0.0.1", relay_port, room, token, 4, CollabConstants.WorkspaceMode.HOST_WORKSPACE, false)
+	_check(err == OK, "relay host starts (%s)" % error_string(err))
+	_check(host.session_manager.is_relay(), "host manager reports relay mode")
+	_check(host.local_peer_id() == CollabRelayProtocol.HOST_APP_ID, "relay host is assigned app id 1")
+	err = client.join_via_relay("127.0.0.1", relay_port, room, token, CollabConstants.WorkspaceMode.HOST_WORKSPACE)
+	_check(err == OK, "relay client join starts (%s)" % error_string(err))
+
+	var deadline: int = Time.get_ticks_msec() + 6000
+	while Time.get_ticks_msec() < deadline:
+		relay.poll()
+		host.poll()
+		client.poll()
+		if bool(state["client_joined"]) and host.registry.count() >= 2 and client.registry.count() >= 2:
+			break
+		OS.delay_msec(5)
+
+	_check(bool(state["client_joined"]), "relay client received WELCOME")
+	_check(host.registry.count() == 2, "relay host registry has 2 participants (got %d)" % host.registry.count())
+	_check(client.registry.count() >= 2, "relay client registry has 2 participants (got %d)" % client.registry.count())
+	_check(bool(state["client_saw_host"]), "relay client sees the host")
+
+	if bool(state["client_joined"]):
+		client.send_cursor({
+			"view": CollabConstants.CURSOR_VIEW_3D,
+			"camera_transform": Transform3D.IDENTITY,
+			"ray_origin": Vector3.ZERO,
+			"ray_direction": Vector3.FORWARD,
+			"viewport_pos": Vector2(0.5, 0.5),
+			"scene_id": "",
+			"anim": CollabConstants.CURSOR_ANIM_IDLE,
+			"time_ms": Time.get_ticks_msec(),
+		})
+		var cursor_deadline: int = Time.get_ticks_msec() + 3000
+		while Time.get_ticks_msec() < cursor_deadline and int(state["host_cursor_from_peer"]) < 0:
+			relay.poll()
+			host.poll()
+			client.poll()
+			OS.delay_msec(5)
+		_check(int(state["host_cursor_from_peer"]) >= 0, "relay host received a relayed cursor")
+
+	# Host leaves: the relay notifies the client, which must observe a stop.
+	client.session_stopped.connect(func(_reason: String) -> void: state["host_stopped"] = true)
+	host.stop("test end")
+	var stop_deadline: int = Time.get_ticks_msec() + 4000
+	while Time.get_ticks_msec() < stop_deadline and not bool(state["host_stopped"]):
+		relay.poll()
+		client.poll()
+		OS.delay_msec(5)
+	_check(bool(state["host_stopped"]), "relay client saw the host stop")
+
+	client.stop("cleanup")
+	host.free()
+	client.free()
+	host_manager.free()
+	client_manager.free()
+	relay.stop()
+	relay.free()
+
+
+## A client presenting the wrong session token must be rejected by the relay
+## before any application handshake happens.
+func _test_relay_token_rejection() -> void:
+	print("[relay token rejection]")
+	var logs := CollabLog.new()
+	var relay_port: int = 45991
+	var relay := CollabRelayServer.new(logs)
+	_check(relay.start(relay_port, 8) == OK, "relay server starts for token test")
+
+	var host_manager := CollabSessionManager.new(logs)
+	var host := CollabSessionCoordinator.new()
+	host.setup(host_manager, logs)
+	host.require_token = true
+	_check(host.start_host_via_relay("127.0.0.1", relay_port, "ROOM99", "correct", 4, CollabConstants.WorkspaceMode.HOST_WORKSPACE, false) == OK, "host starts for token test")
+
+	var bad_manager := CollabSessionManager.new(logs)
+	var bad := CollabSessionCoordinator.new()
+	bad.setup(bad_manager, logs)
+	var state: Dictionary = {"failed": false}
+	bad_manager.connection_failed.connect(func(_reason: String) -> void: state["failed"] = true)
+	bad.join_via_relay("127.0.0.1", relay_port, "ROOM99", "wrong", CollabConstants.WorkspaceMode.HOST_WORKSPACE)
+
+	var deadline: int = Time.get_ticks_msec() + 4000
+	while Time.get_ticks_msec() < deadline and not bool(state["failed"]):
+		relay.poll()
+		host.poll()
+		bad.poll()
+		OS.delay_msec(5)
+	_check(bool(state["failed"]), "bad token is rejected by the relay")
+
+	bad.stop("cleanup")
+	host.stop("cleanup")
+	host.free()
+	bad.free()
+	host_manager.free()
+	bad_manager.free()
+	relay.stop()
+	relay.free()
 
 
 ## Drives two in-process peers until [param done] returns true or the timeout
@@ -1030,6 +1370,30 @@ func _test_general_property_sync() -> void:
 			return false
 		return (cs.shape as BoxShape3D).size.is_equal_approx(Vector3(4, 5, 6)))
 	_check(shape_edit, "in-place edit of a nested sub-resource reached the client")
+
+	# A file-backed resource (loaded from a .tres, so it has a res:// path) must
+	# sync in-memory property edits too; sending only its path would leave the
+	# client on its stale on-disk copy.
+	var file_mat := StandardMaterial3D.new()
+	file_mat.take_over_path("res://collab_e2e_mat.tres")
+	file_mat.albedo_color = Color(0.2, 0.4, 0.6)
+	host_mesh.material_override = file_mat
+	var file_synced: bool = _pump(host, client, host_sync, client_sync, 6000, func() -> bool:
+		var client_mesh: MeshInstance3D = client_root.get_node_or_null("Mesh") as MeshInstance3D
+		if client_mesh == null:
+			return false
+		var received := client_mesh.material_override as StandardMaterial3D
+		return received != null and received.albedo_color.is_equal_approx(Color(0.2, 0.4, 0.6)))
+	_check(file_synced, "path-backed material_override reached the client")
+
+	file_mat.albedo_color = Color(0.7, 0.2, 0.2)
+	var file_edit: bool = _pump(host, client, host_sync, client_sync, 6000, func() -> bool:
+		var client_mesh: MeshInstance3D = client_root.get_node_or_null("Mesh") as MeshInstance3D
+		if client_mesh == null:
+			return false
+		var received := client_mesh.material_override as StandardMaterial3D
+		return received != null and received.albedo_color.is_equal_approx(Color(0.7, 0.2, 0.2)))
+	_check(file_edit, "in-place edit of a path-backed material propagated to the client")
 
 	client_sync.detach_scene()
 	host_sync.detach_scene()
