@@ -6,6 +6,9 @@
 [ext_resource type="PackedScene" uid="uid://gu6ykdhdpv51" path="res://Entities/spawn_point.tscn" id="3_d41l6"]
 [ext_resource type="Material" uid="uid://lft35drbv2tk" path="res://assets/textures/Rock Wall 17/2k/Rock Wall 17.tres" id="5_of52u"]
 
+[sub_resource type="BoxOccluder3D" id="BoxOccluder3D_ydc41"]
+size = Vector3(315, 300.843, 315)
+
 [node name="Node3D" type="Node3D" unique_id=567674071]
 
 [node name="Level 1" type="CSGBox3D" parent="." unique_id=662840749]
@@ -96,7 +99,6 @@ material_override = ExtResource("5_of52u")
 use_collision = true
 radius = 144.33594
 height = 45.004333
-material = ExtResource("5_of52u")
 
 [node name="CSGCylinder3D6" type="CSGCylinder3D" parent="Boss 1" unique_id=435945400]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 150.32906, 0)
@@ -133,3 +135,7 @@ height = 180.07599
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -30.177597, 0)
 inner_radius = 157.44673
 outer_radius = 92.0541
+
+[node name="OccluderInstance3D" type="OccluderInstance3D" parent="Boss 1" unique_id=141857105]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 63.524242, 0)
+occluder = SubResource("BoxOccluder3D_ydc41")
